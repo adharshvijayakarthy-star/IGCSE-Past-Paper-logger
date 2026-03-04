@@ -1,11 +1,17 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Dexie from "dexie"
 import { useAppStore } from "@/store/appStore"
 import { getSubjectConfigsForUser } from "@/lib/db/subjectConfig"
-import { upsertPaperAttempt } from "@/lib/db/paperAttempt"
+import {
+  DuplicatePaperAttemptError,
+  upsertPaperAttempt
+} from "@/lib/db/paperAttempt"
 import { db } from "@/lib/db"
 import { PaperAttempt, SubjectConfig } from "@/types/domain"
+import { getOfficialTotal } from "@/lib/config/paperTotals"
+import { Toast } from "@/components/ui/toast"
 
 const SESSIONS = ["May/June", "Oct/Nov", "Feb/March"] as const
 
@@ -30,13 +36,16 @@ export default function LogPage() {
 
   const [marksScored, setMarksScored] = useState<number | "">("")
   const [marksAttempted, setMarksAttempted] = useState<number | "">("")
-  const [officialTotal, setOfficialTotal] = useState<number | "">(80)
+  const [officialTotal, setOfficialTotal] = useState<number | "">("")
 
   const [difficulty, setDifficulty] = useState(5)
   const [comment, setComment] = useState("")
   const [manualOverride, setManualOverride] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [toast, setToast] = useState<{
+    message: string
+    variant: "success" | "error"
+  } | null>(null)
 
   const [attempts, setAttempts] = useState<PaperAttempt[]>([])
   const [editingAttempt, setEditingAttempt] = useState<PaperAttempt | null>(null)
@@ -47,8 +56,7 @@ export default function LogPage() {
   const [editMarksScored, setEditMarksScored] = useState<number | "">("")
   const [editMarksAttempted, setEditMarksAttempted] =
     useState<number | "">("")
-  const [editOfficialTotal, setEditOfficialTotal] =
-    useState<number | "">(80)
+  const [editOfficialTotal, setEditOfficialTotal] = useState<number | "">("")
   const [editDifficulty, setEditDifficulty] = useState(5)
   const [editComment, setEditComment] = useState("")
   const [editManualOverride, setEditManualOverride] = useState(false)
@@ -119,6 +127,16 @@ export default function LogPage() {
   }, [isFebSession])
 
   useEffect(() => {
+    if (!subject || !paper) {
+      setOfficialTotal("")
+      return
+    }
+
+    const total = getOfficialTotal(subject, paper, year)
+    setOfficialTotal(total > 0 ? total : "")
+  }, [paper, subject, year])
+
+  useEffect(() => {
     if (!editingAttempt) return
 
     setEditYear(editingAttempt.year)
@@ -155,7 +173,7 @@ export default function LogPage() {
     const variant = `${paper}${variantNumber}`
 
     setSaving(true)
-    setSuccessMessage(null)
+    setToast(null)
 
     try {
       await upsertPaperAttempt({
@@ -173,6 +191,16 @@ export default function LogPage() {
         manualOverride
       })
 
+      const rows = await db.paperAttempts
+        .where("userId")
+        .equals(activeUser.id)
+        .toArray()
+      const parsed = rows.map((attempt) => ({
+        ...attempt,
+        dateLogged: new Date(attempt.dateLogged)
+      }))
+      setAttempts(parsed)
+
       setSubject("")
       setPaper(null)
       setYear(CURRENT_YEAR)
@@ -180,12 +208,33 @@ export default function LogPage() {
       setVariantNumber(1)
       setMarksScored("")
       setMarksAttempted("")
-      setOfficialTotal(80)
+      setOfficialTotal("")
       setDifficulty(5)
       setComment("")
       setManualOverride(false)
 
-      setSuccessMessage("Paper logged successfully.")
+      setToast({
+        message: "Paper logged successfully",
+        variant: "success"
+      })
+    } catch (error) {
+      if (error instanceof DuplicatePaperAttemptError) {
+        setToast({
+          message:
+            "This paper has already been logged. Edit the existing entry instead.",
+          variant: "error"
+        })
+      } else if (error instanceof Dexie.DexieError) {
+        setToast({
+          message: "Failed to save paper. Please try again.",
+          variant: "error"
+        })
+      } else {
+        setToast({
+          message: "Failed to save paper. Please try again.",
+          variant: "error"
+        })
+      }
     } finally {
       setSaving(false)
     }
@@ -242,6 +291,7 @@ export default function LogPage() {
     setEditSaving(true)
     try {
       await upsertPaperAttempt({
+        id: editingAttempt.id,
         userId: activeUser.id,
         subjectCode: editingAttempt.subjectCode,
         year: editYear,
@@ -267,6 +317,18 @@ export default function LogPage() {
       setAttempts(parsed)
 
       setEditingAttempt(null)
+    } catch (error) {
+      if (!(error instanceof Dexie.DexieError)) {
+        setToast({
+          message: "Failed to save paper. Please try again.",
+          variant: "error"
+        })
+        return
+      }
+      setToast({
+        message: "Failed to save paper. Please try again.",
+        variant: "error"
+      })
     } finally {
       setEditSaving(false)
     }
@@ -280,18 +342,32 @@ export default function LogPage() {
     )
     if (!confirmed) return
 
-    await db.paperAttempts.delete(id)
+    try {
+      await db.paperAttempts.delete(id)
 
-    const rows = await db.paperAttempts
-      .where("userId")
-      .equals(activeUser.id)
-      .toArray()
-    const parsed = rows.map((attempt) => ({
-      ...attempt,
-      dateLogged: new Date(attempt.dateLogged)
-    }))
-    setAttempts(parsed)
-    setEditingAttempt(null)
+      const rows = await db.paperAttempts
+        .where("userId")
+        .equals(activeUser.id)
+        .toArray()
+      const parsed = rows.map((attempt) => ({
+        ...attempt,
+        dateLogged: new Date(attempt.dateLogged)
+      }))
+      setAttempts(parsed)
+      setEditingAttempt(null)
+    } catch (error) {
+      if (!(error instanceof Dexie.DexieError)) {
+        setToast({
+          message: "Failed to save paper. Please try again.",
+          variant: "error"
+        })
+        return
+      }
+      setToast({
+        message: "Failed to save paper. Please try again.",
+        variant: "error"
+      })
+    }
   }
 
   if (mode === "none") {
@@ -299,21 +375,21 @@ export default function LogPage() {
       <div className="col-span-12 max-w-5xl flex flex-col items-center justify-center py-16 gap-4">
         <div className="text-center space-y-2 mb-4">
           <h2 className="text-xl font-semibold">Log past papers</h2>
-          <p className="text-sm">
+          <p className="text-sm text-muted">
             Choose what you want to do.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-4">
           <button
             type="button"
-            className="min-w-[200px] rounded-md border px-4 py-3 text-sm font-medium"
+            className="min-w-[200px] btn-primary"
             onClick={() => setMode("create")}
           >
             Log New Past Paper
           </button>
           <button
             type="button"
-            className="min-w-[200px] rounded-md border px-4 py-3 text-sm font-medium"
+            className="min-w-[200px] btn-primary"
             onClick={() => setMode("edit")}
           >
             Edit Previous Entry
@@ -331,7 +407,7 @@ export default function LogPage() {
 
           <form onSubmit={handleSave} className="space-y-6">
         {/* Section A — Paper Information */}
-        <section className="rounded-lg border px-4 py-4 space-y-4">
+        <section className="card-elevated px-4 py-4 space-y-4">
           <h3 className="text-sm font-medium">Paper information</h3>
 
           <div className="grid grid-cols-12 gap-4">
@@ -419,7 +495,7 @@ export default function LogPage() {
         </section>
 
         {/* Section B — Paper Selection */}
-        <section className="rounded-lg border px-4 py-4 space-y-4">
+        <section className="card-elevated px-4 py-4 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">Paper selection</h3>
             {selectedConfig && (
@@ -461,7 +537,7 @@ export default function LogPage() {
         </section>
 
         {/* Section C — Marks & Performance */}
-        <section className="rounded-lg border px-4 py-4 space-y-4">
+        <section className="card-elevated px-4 py-4 space-y-4">
           <h3 className="text-sm font-medium">Marks & performance</h3>
 
           <div className="grid grid-cols-12 gap-4">
@@ -510,13 +586,11 @@ export default function LogPage() {
                 min={1}
                 className="w-full rounded-md border px-3 py-2 text-sm"
                 value={officialTotal}
-                onChange={(e) => {
-                  const value = e.target.value
-                  setOfficialTotal(
-                    value === "" ? "" : Number(value)
-                  )
-                }}
+                readOnly
               />
+              <p className="text-xs helper-text">
+                Official total is automatically determined from exam paper.
+              </p>
             </div>
           </div>
 
@@ -581,7 +655,7 @@ export default function LogPage() {
         </section>
 
         {/* Section D — Additional */}
-        <section className="rounded-lg border px-4 py-4 space-y-4">
+        <section className="card-elevated px-4 py-4 space-y-4">
           <h3 className="text-sm font-medium">Additional</h3>
 
           <div className="space-y-1">
@@ -608,17 +682,14 @@ export default function LogPage() {
           </label>
 
           <div className="flex items-center justify-between gap-4">
-            {successMessage && (
-              <p className="text-xs helper-text">
-                {successMessage}
-              </p>
-            )}
-
             <button
               type="submit"
               disabled={!isFormValid || saving}
-              className="ml-auto inline-flex items-center rounded-md border px-4 py-2 text-sm font-medium"
+              className="ml-auto btn-primary"
             >
+              {saving && (
+                <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent" />
+              )}
               {saving ? "Saving..." : "Save paper"}
             </button>
           </div>
@@ -634,7 +705,7 @@ export default function LogPage() {
           </h2>
 
           {/* Filters for edit mode */}
-          <section className="rounded-lg border px-4 py-4 space-y-4 mb-6">
+          <section className="card-elevated px-4 py-4 space-y-4 mb-6">
             <h3 className="text-sm font-medium">
               Choose subject and paper
             </h3>
@@ -690,7 +761,7 @@ export default function LogPage() {
           {/* Attempt list */}
           {filteredEditAttempts.length === 0 ? (
             <div className="flex items-center justify-center py-12">
-              <p className="text-sm opacity-80">
+              <p className="text-sm text-muted">
                 No entries for this paper yet.
               </p>
             </div>
@@ -699,14 +770,14 @@ export default function LogPage() {
               {editGroups.map((group) => (
                 <section
                   key={group.year}
-                  className="rounded-lg border"
+                  className="card-elevated"
                 >
                   <div className="flex items-center justify-between px-4 py-3">
                     <div className="flex items-center gap-3">
                       <span className="text-base font-medium">
                         {group.year}
                       </span>
-                      <span className="text-xs">
+                      <span className="text-xs text-muted">
                         {group.attempts.length} entries
                       </span>
                     </div>
@@ -734,20 +805,20 @@ export default function LogPage() {
                             onClick={() =>
                               setEditingAttempt(attempt)
                             }
-                            className="w-full rounded-md border px-3 py-2 text-left"
+                            className="w-full rounded-md border bg-[var(--surface-alt)] px-3 py-2 text-left"
                           >
                             <div className="flex items-center justify-between text-sm">
                               <div className="flex flex-wrap items-center gap-3">
                                 <span className="font-medium">
                                   {attempt.subjectCode}
                                 </span>
-                                <span className="text-xs">
+                                <span className="text-xs text-muted">
                                   Paper {attempt.paperNumber}
                                 </span>
-                                <span className="text-xs">
+                                <span className="text-xs text-muted">
                                   {attempt.session}
                                 </span>
-                                <span className="text-xs">
+                                <span className="text-xs text-muted">
                                   Variant {attempt.variant}
                                 </span>
                               </div>
@@ -759,7 +830,7 @@ export default function LogPage() {
                                 <span>
                                   {percent.toFixed(0)}%
                                 </span>
-                                <span className="text-xs">
+                                <span className="text-xs text-muted">
                                   {attempt.difficulty}/10
                                 </span>
                                 <span
@@ -791,10 +862,10 @@ export default function LogPage() {
       {editingAttempt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 overlay-backdrop backdrop-blur-sm"
             onClick={() => setEditingAttempt(null)}
           />
-          <div className="relative z-50 w-full max-w-3xl mx-4 rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className="relative z-50 w-full max-w-3xl mx-4 rounded-2xl border bg-[var(--surface)] shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
             <form
               onSubmit={handleEditSave}
               className="space-y-4 text-sm"
@@ -961,7 +1032,7 @@ export default function LogPage() {
                 {editingAttempt && (
                   <button
                     type="button"
-                    className="mr-auto inline-flex items-center rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm text-white"
+                    className="mr-auto btn-danger"
                     onClick={() => deleteAttempt(editingAttempt.id)}
                   >
                     Delete Entry
@@ -969,7 +1040,7 @@ export default function LogPage() {
                 )}
                 <button
                   type="button"
-                  className="inline-flex items-center rounded-md border px-4 py-2 text-sm"
+                  className="btn-secondary"
                   onClick={() => setEditingAttempt(null)}
                 >
                   Cancel
@@ -977,8 +1048,11 @@ export default function LogPage() {
                 <button
                   type="submit"
                   disabled={editSaving}
-                  className="inline-flex items-center rounded-md border px-4 py-2 text-sm font-medium"
+                  className="btn-primary"
                 >
+                  {editSaving && (
+                    <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent" />
+                  )}
                   {editSaving ? "Saving..." : "Save changes"}
                 </button>
               </div>
@@ -986,6 +1060,15 @@ export default function LogPage() {
           </div>
         </div>
       )}
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          variant={toast.variant}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   )
 }
+

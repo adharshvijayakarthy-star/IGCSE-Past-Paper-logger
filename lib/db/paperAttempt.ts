@@ -2,6 +2,7 @@ import { db } from "./index"
 import { PaperAttempt } from "@/types/domain"
 
 export interface UpsertPaperAttemptParams {
+  id?: string
   userId: string
   subjectCode: string
   year: number
@@ -16,10 +17,18 @@ export interface UpsertPaperAttemptParams {
   manualOverride: boolean
 }
 
+export class DuplicatePaperAttemptError extends Error {
+  constructor() {
+    super("This paper has already been logged. Edit the existing entry instead.")
+    this.name = "DuplicatePaperAttemptError"
+  }
+}
+
 export async function upsertPaperAttempt(
   params: UpsertPaperAttemptParams
 ) {
   const {
+    id,
     userId,
     subjectCode,
     year,
@@ -39,13 +48,17 @@ export async function upsertPaperAttempt(
     .equals([userId, subjectCode, year, session, variant, paperNumber])
     .first()
 
+  if (existing && existing.id !== id) {
+    throw new DuplicatePaperAttemptError()
+  }
+
   const completionStatus =
     manualOverride || marksAttempted >= officialTotal
       ? "complete"
       : "partial"
 
   const attempt: PaperAttempt = {
-    id: existing?.id ?? crypto.randomUUID(),
+    id: id ?? existing?.id ?? crypto.randomUUID(),
     userId,
     subjectCode,
     year,

@@ -11,7 +11,7 @@ interface AppState {
 
   initialize: () => Promise<void>
   setTheme: (theme: ThemeType) => void
-  setActiveUser: (user: User) => void
+  setActiveUser: (user: User | null) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -44,6 +44,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       db.users.update(user.id, {
         settings: { theme }
       })
+
+      set({
+        activeUser: {
+          ...user,
+          settings: { ...user.settings, theme }
+        },
+        theme
+      })
+      return
     }
 
     set({ theme })

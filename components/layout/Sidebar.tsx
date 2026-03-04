@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "Log", href: "/log" },
   { label: "History", href: "/history" },
+  { label: "Analytics", href: "/analytics" },
   { label: "Settings", href: "/settings" }
 ]
 
@@ -14,8 +15,8 @@ export function Sidebar() {
   const pathname = usePathname()
 
   return (
-    <aside className="h-screen w-60 flex-shrink-0 border-r">
-      <div className="h-16 flex items-center px-4">
+    <aside className="h-screen w-60 flex-shrink-0 border-r bg-[var(--surface)]">
+      <div className="h-16 flex items-center px-4 border-b">
         <span className="text-sm font-semibold tracking-tight">
           IGCSE Paper Logger
         </span>
@@ -30,8 +31,8 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               aria-current={isActive ? "page" : undefined}
-              className={`flex items-center rounded-md px-3 py-2 text-sm ${
-                isActive ? "font-semibold" : "font-normal"
+              className={`sidebar-link ${
+                isActive ? "sidebar-link-active" : ""
               }`}
             >
               <span>{item.label}</span>
@@ -42,4 +43,3 @@ export function Sidebar() {
     </aside>
   )
 }
-
